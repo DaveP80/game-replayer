@@ -261,6 +261,31 @@ body {
   max-width: 52rem;
 }
 
+/* Chess replayer player bars
+----------------------------------------------------------------------------- */
+.chess-replayer-player-bar {
+  align-items: center;
+  display: flex;
+  gap: var(--spacing-s);
+  margin-inline: auto;
+  max-width: 52rem;
+  padding-block: var(--spacing-s);
+}
+
+.chess-replayer-player-avatar {
+  border-radius: var(--border-radius);
+  flex-shrink: 0;
+  height: 25px;
+  object-fit: cover;
+  width: 25px;
+}
+
+.chess-replayer-player-username {
+  color: var(--text-color);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
 /* Chess replayer controls
 ----------------------------------------------------------------------------- */
 .chess-replayer-controls {

@@ -6,14 +6,14 @@
 //   gcloud functions deploy chessComProxy \
 //     --gen2 \
 //     --runtime=nodejs20 \
-//     --region=YOUR_REGION \
+//     --region=us-east1 \
 //     --source=. \
 //     --entry-point=chessComProxy \
 //     --trigger-http \
 //     --allow-unauthenticated
 //
 // Then call it as:
-//   https://YOUR_FUNCTION_URL?gameId=170527589924
+//   https://YOUR_FUNCTION_URL?gameId=835527639924
 
 const ALLOWED_ORIGIN = '*';
 const GAME_ID_PATTERN = /^\d+$/;

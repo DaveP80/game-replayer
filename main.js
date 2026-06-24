@@ -23,6 +23,8 @@ const NIGHT_MODE_STORAGE_KEY = 'nightMode';
 let chessReplayer;
 let startingPositionOnly;
 let chessReplayerBoard;
+let topPlayerBar;
+let bottomPlayerBar;
 
 let chessReplayerControls = null;
 let firstButton = null;
@@ -37,10 +39,16 @@ function createUI() {
   startingPositionOnly = chessReplayer.hasAttribute('data-start');
   chessReplayer.replaceChildren();
 
+  // Create player bars (top = opponent shown at top, bottom = at bottom)
+  topPlayerBar = createPlayerBar();
+  bottomPlayerBar = createPlayerBar();
+
   // Create board element
   chessReplayerBoard = document.createElement('div');
   chessReplayerBoard.classList.add('chess-replayer-board');
+  chessReplayer.append(topPlayerBar);
   chessReplayer.append(chessReplayerBoard);
+  chessReplayer.append(bottomPlayerBar);
 
   // Only create controls if not in start-only mode
   if (startingPositionOnly) return;
@@ -92,6 +100,60 @@ function createUI() {
   chessReplayerControls.append(lastButton);
 
   chessReplayer.append(chessReplayerControls);
+}
+
+// Create and return an (initially empty/hidden) player info bar element,
+// containing an avatar image and a username label.
+function createPlayerBar() {
+  const bar = document.createElement('div');
+  bar.classList.add('chess-replayer-player-bar');
+  bar.hidden = true;
+
+  const avatar = document.createElement('img');
+  avatar.classList.add('chess-replayer-player-avatar');
+  avatar.alt = '';
+  avatar.hidden = true;
+  bar.append(avatar);
+
+  const username = document.createElement('span');
+  username.classList.add('chess-replayer-player-username');
+  bar.append(username);
+
+  return bar;
+}
+
+// Fill in a player bar's avatar/username, or hide it if there is no player
+// data to show.
+function fillPlayerBar(bar, player) {
+  const avatar = bar.querySelector('.chess-replayer-player-avatar');
+  const username = bar.querySelector('.chess-replayer-player-username');
+
+  if (!player || !player.username) {
+    bar.hidden = true;
+    return;
+  }
+
+  bar.hidden = false;
+  username.textContent = player.username;
+
+  if (player.avatarUrl) {
+    avatar.src = player.avatarUrl;
+    avatar.alt = player.username;
+    avatar.hidden = false;
+  } else {
+    avatar.hidden = true;
+  }
+}
+
+// Place white/black player info on the correct side of the board, based on
+// orientation (cm-chessboard shows white at the bottom when orientation is
+// COLOR.white, and at the top otherwise).
+function setPlayerBars(orientation, players) {
+  if (!topPlayerBar || !bottomPlayerBar) return;
+
+  const whiteOnBottom = orientation === COLOR.white;
+  fillPlayerBar(bottomPlayerBar, players && (whiteOnBottom ? players.white : players.black));
+  fillPlayerBar(topPlayerBar, players && (whiteOnBottom ? players.black : players.white));
 }
 
 // Create and return a button containing an SVG icon
@@ -236,10 +298,124 @@ function extractMoveTimestamps(pgnText) {
   return timestamps.length > 0 ? timestamps : null;
 }
 
-// Matches chess.com live/daily game URLs, e.g.
-// https://www.chess.com/game/live/170527589924
-const CHESSCOM_URL_REGEX =
-  /^https?:\/\/(?:www\.)?chess\.com\/game\/(?:live|daily)\/(\d+)/i;
+// Find the first "http://" or "https://" URL token within arbitrary pasted
+// text (e.g. a bare link, or a link wrapped in markdown like
+// "[label](https://...)"), and return just that URL substring.
+function findUrlInText(text) {
+  for (const scheme of ['https://', 'http://']) {
+    const start = text.indexOf(scheme);
+    if (start === -1) continue;
+
+    let end = text.length;
+    for (let i = start; i < text.length; i++) {
+      const char = text[i];
+      if (char === ' ' || char === '\t' || char === '\n' ||
+          char === ')' || char === ']' || char === '"' || char === '\'') {
+        end = i;
+        break;
+      }
+    }
+
+    return text.slice(start, end);
+  }
+  return null;
+}
+
+// Extract a chess.com game ID from pasted text, e.g.
+// https://www.chess.com/game/live/177527585924
+// https://www.chess.com/game/126527599924
+// [https://www.chess.com/game/live/195527589924](https://www.chess.com/game/830527589954)
+function extractChessComGameId(text) {
+  const urlText = findUrlInText(text);
+  if (!urlText) return null;
+
+  let url;
+  try {
+    url = new URL(urlText);
+  } catch {
+    return null;
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (!url.hostname.endsWith('chess.com')) return null;
+
+  const segments = url.pathname.split('/').filter(Boolean);
+  const lastSegment = segments[segments.length - 1];
+  if (!lastSegment) return null;
+  for (const char of lastSegment) {
+    if (char < '0' || char > '9') return null;
+  }
+
+  return lastSegment;
+}
+
+// Decode chess.com's TCN move encoding (the "moveList" field from its
+// callback API) into PGN movetext. TCN packs each move into 2 characters
+// from a custom 64-symbol alphabet: one index per from/to square, with
+// promotions encoded by pushing the "to" character's index past 63.
+// See https://github.com/chess-tcn/chess-tcn-js (MIT) for the reference
+// implementation this is adapted from.
+const TCN_ALPHABET =
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' +
+  '!?{~}(^)[_]@#$,./&-*++=';
+const TCN_PROMO_PIECES = 'qnrbkp';
+
+// Convert a 0-63 index into a board square (e.g. "e4").
+function tcnIndexToSquare(index) {
+  const file = index % 8;
+  const rank = Math.floor(index / 8) + 1;
+  const fileChar = 'abcdefgh'[file];
+  return fileChar ? fileChar + rank : '';
+}
+
+// Decode a TCN-encoded moveList string into an array of
+// {from, to, promotion?} move objects.
+function decodeTcnMoveList(tcnString) {
+  const moves = [];
+
+  for (let i = 0; i < tcnString.length; i += 2) {
+    const code1 = TCN_ALPHABET.indexOf(tcnString[i]);
+    let code2 = TCN_ALPHABET.indexOf(tcnString[i + 1]);
+    const move = {};
+
+    if (code2 > 63) {
+      const promoIndex = Math.floor((code2 - 64) / 3);
+      move.promotion = TCN_PROMO_PIECES[promoIndex];
+
+      const offset = ((code2 - 1) % 3) - 1;
+      code2 = code1 + (code1 < 16 ? -8 : 8) + offset;
+    }
+
+    move.from = tcnIndexToSquare(code1);
+    move.to = tcnIndexToSquare(code2);
+    moves.push(move);
+  }
+
+  return moves;
+}
+
+// Build PGN movetext from a chess.com game's encoded moveList, carrying
+// over any header tags (e.g. TimeControl) chess.com provided separately.
+function buildPgnFromMoveList(moveList, headers) {
+  const chess = new Chess();
+
+  if (headers) {
+    Object.keys(headers).forEach(key => {
+      if (headers[key] != null) chess.header(key, String(headers[key]));
+    });
+  }
+
+  const moves = decodeTcnMoveList(moveList);
+  for (const decodedMove of moves) {
+    const result = chess.move(decodedMove);
+    if (!result) {
+      throw new Error(`Illegal move while decoding moveList: ` +
+        `${decodedMove.from}-${decodedMove.to}`);
+    }
+  }
+
+  return chess.pgn();
+}
 
 // Parse a "base+increment" time control string (in seconds) into deciseconds.
 function parseTimeControl(timeControl) {
@@ -289,7 +465,7 @@ function buildThinkTimesFromChessComGame(gameJson) {
 // gcp-proxy/) that fetches it server-side and forwards the response with
 // CORS allowed. Set this to your deployed function's URL.
 const CHESS_PROXY_BASE_URL =
-  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/chessComProxy';
+  'https://chesscomproxy-jh4a3z47hq-ue.a.run.app';
 
 // Fetch a live game's data from chess.com's callback endpoint.
 async function fetchChessComGame(gameId) {
@@ -327,6 +503,13 @@ function parsePGN(pgnText, precomputedTimestamps) {
     // Check for custom starting position
     const headers = chess.header();
     pgnData.startingPosition = headers.FEN;
+
+    if (headers.White || headers.Black) {
+      pgnData.players = {
+        white: headers.White ? {username: headers.White} : null,
+        black: headers.Black ? {username: headers.Black} : null,
+      };
+    }
 
     if (pgnData.startingPosition) {
       // Set orientation based on whose turn it is
@@ -372,7 +555,7 @@ function getOrientationFromFEN(fen) {
 let chessboard = null;
 
 // Initialize the chessboard
-function initializeBoard(position, orientation) {
+function initializeBoard(position, orientation, players) {
   if (chessboard) {
     chessboard.destroy();
   }
@@ -387,6 +570,8 @@ function initializeBoard(position, orientation) {
       animationDuration: ANIMATION_DURATION,
     },
   });
+
+  setPlayerBars(orientation, players);
 
   if (!startingPositionOnly) updateButtonStates();
 }
@@ -514,7 +699,7 @@ function pausePlayback() {
   if (chessboard && !startingPositionOnly) updateButtonStates();
 }
 
-function loadGame(pgnText, precomputedTimestamps) {
+function loadGame(pgnText, precomputedTimestamps, precomputedPlayers) {
   clearPgnError();
   pausePlayback();
   currentMoveIndex = 0;
@@ -525,7 +710,9 @@ function loadGame(pgnText, precomputedTimestamps) {
     return;
   }
 
-  initializeBoard(pgnData.startingPosition, pgnData.boardOrientation);
+  const players = precomputedPlayers !== undefined ?
+    precomputedPlayers : pgnData.players;
+  initializeBoard(pgnData.startingPosition, pgnData.boardOrientation, players);
   showReplayerView();
 }
 
@@ -534,18 +721,39 @@ function setLoadingState(isLoading) {
   loadPgnButton.textContent = isLoading ? 'Loading…' : 'Load game';
 }
 
+// Normalize chess.com's players.top/players.bottom (keyed by chess.com's
+// own UI layout) into a {white, black} shape keyed by piece color, using
+// each player's own "color" field rather than top/bottom position.
+function buildPlayersFromChessComGame(gameJson) {
+  const rawPlayers = gameJson.players;
+  if (!rawPlayers) return null;
+
+  const players = {white: null, black: null};
+  [rawPlayers.top, rawPlayers.bottom].forEach(player => {
+    if (!player || !player.color) return;
+    players[player.color] = {
+      username: player.username,
+      avatarUrl: player.avatarUrl,
+    };
+  });
+
+  return players;
+}
+
 async function loadFromChessComUrl(gameId) {
   setLoadingState(true);
   try {
     const data = await fetchChessComGame(gameId);
     const gameJson = data.game || data;
-    const pgnText = gameJson.pgn;
-    if (!pgnText) {
-      throw new Error('Response did not include PGN data.');
+    if (!gameJson.moveList) {
+      throw new Error('Response did not include move data.');
     }
 
+    const pgnText =
+      buildPgnFromMoveList(gameJson.moveList, gameJson.pgnHeaders);
     const timestamps = buildThinkTimesFromChessComGame(gameJson);
-    loadGame(pgnText, timestamps);
+    const players = buildPlayersFromChessComGame(data);
+    loadGame(pgnText, timestamps, players);
   } catch (error) {
     console.error('Error loading chess.com game:', error);
     showPgnError(
@@ -565,9 +773,9 @@ async function handleLoadPgn() {
 
   clearPgnError();
 
-  const chessComMatch = inputText.match(CHESSCOM_URL_REGEX);
-  if (chessComMatch) {
-    await loadFromChessComUrl(chessComMatch[1]);
+  const gameId = extractChessComGameId(inputText);
+  if (gameId) {
+    await loadFromChessComUrl(gameId);
     return;
   }
 
