@@ -25,6 +25,26 @@
 </head>
 
 <body>
-<div data-pgn="games/01.pgn"></div>
+<button type="button" id="night-mode-toggle" class="night-mode-toggle"
+  aria-label="Enable night mode" aria-pressed="false">
+  <img id="night-mode-moon" class="night-mode-icon" src="moon.svg" alt="">
+  <img id="night-mode-sun" class="night-mode-icon" src="sun.svg" alt="" hidden>
+</button>
+<div class="app">
+  <section id="pgn-input-view" class="pgn-input-view">
+    <h1 class="pgn-input-title">Chess replayer</h1>
+    <p class="pgn-input-description">Paste a PGN below to replay the game.</p>
+    <label class="pgn-input-label" for="pgn-input">PGN</label>
+    <textarea id="pgn-input" class="pgn-input-textarea" rows="14"
+      placeholder="[Event &quot;Live Chess&quot;]&#10;[White &quot;Player 1&quot;]&#10;[Black &quot;Player 2&quot;]&#10;&#10;1. e4 e5 2. Nf3 Nc6 ..."></textarea>
+    <p id="pgn-error" class="pgn-error" hidden></p>
+    <button type="button" id="load-pgn" class="pgn-load-button">Load game</button>
+  </section>
+
+  <section id="replayer-view" class="replayer-view" hidden>
+    <button type="button" id="new-pgn" class="new-pgn-button">Paste new PGN</button>
+    <div class="chess-replayer"></div>
+  </section>
+</div>
 </body>
 </html>

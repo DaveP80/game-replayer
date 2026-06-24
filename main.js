@@ -9,6 +9,17 @@ const ANIMATION_DURATION = 250;
 const PLAYBACK_INTERVAL = 500; // Waiting time between animations
 const ICONS_PATH = 'icons.svg';
 
+const pgnInputView = document.getElementById('pgn-input-view');
+const replayerView = document.getElementById('replayer-view');
+const pgnInput = document.getElementById('pgn-input');
+const pgnError = document.getElementById('pgn-error');
+const loadPgnButton = document.getElementById('load-pgn');
+const newPgnButton = document.getElementById('new-pgn');
+const nightModeToggle = document.getElementById('night-mode-toggle');
+const nightModeMoon = document.getElementById('night-mode-moon');
+const nightModeSun = document.getElementById('night-mode-sun');
+const NIGHT_MODE_STORAGE_KEY = 'nightMode';
+
 let chessReplayer;
 let startingPositionOnly;
 let chessReplayerBoard;
@@ -22,12 +33,9 @@ let lastButton = null;
 
 // Generate UI through JavaScript
 function createUI() {
-  // Get the element and check for start-only mode
-  chessReplayer = document.querySelector('[data-pgn]');
+  chessReplayer = document.querySelector('.chess-replayer');
   startingPositionOnly = chessReplayer.hasAttribute('data-start');
-
-  // Add the component class
-  chessReplayer.className = 'chess-replayer';
+  chessReplayer.replaceChildren();
 
   // Create board element
   chessReplayerBoard = document.createElement('div');
@@ -142,6 +150,8 @@ function addKeyboardNavigation() {
 }
 
 function handleKeyboard(event) {
+  if (replayerView.hidden) return;
+
   // Ignore if typing in an input field
   if (event.target.tagName === 'INPUT' ||
       event.target.tagName === 'TEXTAREA') {
@@ -172,30 +182,75 @@ function handleKeyboard(event) {
   }
 }
 
-// Get PGN file path
-function getFilePath() {
-  return chessReplayer.dataset.pgn;
+function showInputView() {
+  pausePlayback();
+  replayerView.hidden = true;
+  pgnInputView.hidden = false;
+  pgnInput.focus();
 }
 
-// Load PGN file from the specified path
-async function loadPGN(filePath) {
-  try {
-    const response = await fetch(filePath);
-    if (!response.ok) {
-      throw new Error(`Failed to load PGN file: ${response.status}`);
-    }
+function showReplayerView() {
+  pgnInputView.hidden = true;
+  replayerView.hidden = false;
+}
 
-    return response.text();
-  } catch (error) {
-    console.error('Error loading PGN:', error);
-  }
+function showPgnError(message) {
+  pgnError.textContent = message;
+  pgnError.hidden = false;
+}
+
+function clearPgnError() {
+  pgnError.textContent = '';
+  pgnError.hidden = true;
+}
+
+function setNightMode(enabled) {
+  document.body.classList.toggle('nightMode', enabled);
+  nightModeToggle.setAttribute('aria-pressed', String(enabled));
+  nightModeToggle.setAttribute(
+    'aria-label', enabled ? 'Disable night mode' : 'Enable night mode');
+  nightModeMoon.hidden = enabled;
+  nightModeSun.hidden = !enabled;
+  localStorage.setItem(NIGHT_MODE_STORAGE_KEY, enabled ? '1' : '0');
+}
+
+function initNightMode() {
+  setNightMode(localStorage.getItem(NIGHT_MODE_STORAGE_KEY) === '1');
+  nightModeToggle.addEventListener('click', () => {
+    setNightMode(!document.body.classList.contains('nightMode'));
+  });
 }
 
 let gameHistory = null;
+let moveTimestamps = null; // Think times in deciseconds, one per half-move
+
+// Extract Chess.com-style [%timestamp N] annotations from PGN text.
+// N is think time in deciseconds (tenths of a second).
+function extractMoveTimestamps(pgnText) {
+  const timestamps = [];
+  const regex = /\[%timestamp\s+(\d+)\]/g;
+  let match;
+  while ((match = regex.exec(pgnText)) !== null) {
+    timestamps.push(Number(match[1]));
+  }
+  return timestamps.length > 0 ? timestamps : null;
+}
+
+// Delay in ms before showing the move at gameHistory[moveIndex].
+function getDelayBeforeMove(moveIndex) {
+  if (moveTimestamps && moveIndex > 0) {
+    const timestamp = moveTimestamps[moveIndex - 1];
+    if (timestamp != null) {
+      return timestamp * 100; // deciseconds to milliseconds
+    }
+  }
+  return playbackInterval;
+}
 
 // Parse PGN text, get move history and starting position
 function parsePGN(pgnText) {
   const chess = new Chess();
+  moveTimestamps = extractMoveTimestamps(pgnText);
 
   try {
     chess.load_pgn(pgnText);
@@ -232,6 +287,7 @@ function parsePGN(pgnText) {
     return pgnData;
   } catch (error) {
     console.error('Error parsing PGN:', error);
+    return null;
   }
 }
 
@@ -249,6 +305,10 @@ let chessboard = null;
 
 // Initialize the chessboard
 function initializeBoard(position, orientation) {
+  if (chessboard) {
+    chessboard.destroy();
+  }
+
   chessboard = new Chessboard(chessReplayerBoard, {
     assetsUrl: './dependencies/cm-chessboard/assets/',
     position: position,
@@ -348,32 +408,31 @@ function startPlayback() {
 
   // If at the end, start from beginning
   if (currentMoveIndex >= gameHistory.length - 1) {
-    // Setup the starting position without waiting
     currentMoveIndex = 0;
     chessboard.setPosition(gameHistory[currentMoveIndex], true);
     updateButtonStates();
-
-    // Wait before playing the first move
-    playbackTimeout = setTimeout(playNextMove, playbackInterval);
-  // If not at the end, play the first move without waiting
-  } else playNextMove();
+    playbackTimeout = setTimeout(playNextMove, getDelayBeforeMove(1));
+  } else {
+    playbackTimeout = setTimeout(
+      playNextMove, getDelayBeforeMove(currentMoveIndex + 1));
+  }
 }
 
 // Play a single move, schedule the next one or automatically pause
 function playNextMove() {
-  // Play next move
   currentMoveIndex++;
   chessboard.setPosition(gameHistory[currentMoveIndex], true);
   updateButtonStates();
 
-  // If there is another move, schedule it
   if (currentMoveIndex < gameHistory.length - 1) {
-    playbackTimeout = setTimeout(playNextMove, playbackInterval);
-  // If we've reached the end, pause after the animation has finished
-  } else setTimeout(() => {
-    isPlaying = false;
-    updateButtonStates();
-  }, ANIMATION_DURATION);
+    playbackTimeout = setTimeout(
+      playNextMove, getDelayBeforeMove(currentMoveIndex + 1));
+  } else {
+    setTimeout(() => {
+      isPlaying = false;
+      updateButtonStates();
+    }, ANIMATION_DURATION);
+  }
 }
 
 // Pause playback manually
@@ -384,13 +443,46 @@ function pausePlayback() {
   clearTimeout(playbackTimeout);
   playbackTimeout = null;
 
-  updateButtonStates();
+  if (chessboard && !startingPositionOnly) updateButtonStates();
+}
+
+function loadGame(pgnText) {
+  clearPgnError();
+  pausePlayback();
+  currentMoveIndex = 0;
+
+  const pgnData = parsePGN(pgnText);
+  if (!pgnData) {
+    showPgnError('Could not parse the PGN. Check the format and try again.');
+    return;
+  }
+
+  initializeBoard(pgnData.startingPosition, pgnData.boardOrientation);
+  showReplayerView();
+}
+
+function handleLoadPgn() {
+  const pgnText = pgnInput.value.trim();
+  if (!pgnText) {
+    showPgnError('Paste a PGN before loading.');
+    pgnInput.focus();
+    return;
+  }
+
+  loadGame(pgnText);
 }
 
 createUI();
 addNavigation();
 addKeyboardNavigation();
-const pgnFilePath = getFilePath();
-const pgnText = await loadPGN(pgnFilePath);
-const pgnData = parsePGN(pgnText);
-initializeBoard(pgnData.startingPosition, pgnData.boardOrientation);
+initNightMode();
+
+loadPgnButton.addEventListener('click', handleLoadPgn);
+newPgnButton.addEventListener('click', showInputView);
+
+pgnInput.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    event.preventDefault();
+    handleLoadPgn();
+  }
+});

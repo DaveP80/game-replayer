@@ -2,3 +2,5 @@ node_modules/
 notes/
 temp/
 *.log
+*.DS_Store
+notes.txt
