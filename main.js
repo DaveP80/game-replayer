@@ -284,10 +284,16 @@ function buildThinkTimesFromChessComGame(gameJson) {
   return computeThinkTimesFromClock(remaining, baseDeci, incrementDeci);
 }
 
+// chess.com's callback endpoint does not send CORS headers, so a browser
+// fetch to it directly is blocked. Route it through a public CORS proxy
+// that fetches it server-side and forwards the response with CORS allowed.
+const CORS_PROXY_URL = 'https://corsproxy.io/?url=';
+
 // Fetch a live game's data from chess.com's callback endpoint.
 async function fetchChessComGame(gameId) {
+  const targetUrl = `https://www.chess.com/callback/live/game/${gameId}`;
   const response =
-    await fetch(`https://www.chess.com/callback/live/game/${gameId}`);
+    await fetch(`${CORS_PROXY_URL}${encodeURIComponent(targetUrl)}`);
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`);
   }
