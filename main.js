@@ -236,6 +236,64 @@ function extractMoveTimestamps(pgnText) {
   return timestamps.length > 0 ? timestamps : null;
 }
 
+// Matches chess.com live/daily game URLs, e.g.
+// https://www.chess.com/game/live/170527589924
+const CHESSCOM_URL_REGEX =
+  /^https?:\/\/(?:www\.)?chess\.com\/game\/(?:live|daily)\/(\d+)/i;
+
+// Parse a "base+increment" time control string (in seconds) into deciseconds.
+function parseTimeControl(timeControl) {
+  if (!timeControl || typeof timeControl !== 'string' ||
+      timeControl.includes('/')) {
+    return {baseDeci: 0, incrementDeci: 0};
+  }
+  const [base, increment] = timeControl.split('+');
+  return {
+    baseDeci: (Number(base) || 0) * 10,
+    incrementDeci: (Number(increment) || 0) * 10,
+  };
+}
+
+// Convert chess.com's per-ply "time remaining on clock" values into
+// per-ply think times (deciseconds), accounting for increment.
+function computeThinkTimesFromClock(remaining, baseDeci, incrementDeci) {
+  const lastRemainingByColor = [baseDeci, baseDeci]; // [white, black]
+  return remaining.map((current, index) => {
+    const color = index % 2;
+    const previous = lastRemainingByColor[color];
+    lastRemainingByColor[color] = current;
+    const thinkTime = previous - current + incrementDeci;
+    return thinkTime >= 0 ? thinkTime : 0;
+  });
+}
+
+// Build a think-times array from a chess.com game callback payload.
+function buildThinkTimesFromChessComGame(gameJson) {
+  const raw = gameJson.moveTimestamps;
+  if (!raw) return null;
+
+  const remaining = String(raw).split(',').map(Number)
+    .filter(value => Number.isFinite(value));
+  if (remaining.length === 0) return null;
+
+  const timeControl =
+    (gameJson.pgnHeaders && gameJson.pgnHeaders.TimeControl) ||
+    gameJson.timeControl;
+  const {baseDeci, incrementDeci} = parseTimeControl(timeControl);
+
+  return computeThinkTimesFromClock(remaining, baseDeci, incrementDeci);
+}
+
+// Fetch a live game's data from chess.com's callback endpoint.
+async function fetchChessComGame(gameId) {
+  const response =
+    await fetch(`https://www.chess.com/callback/live/game/${gameId}`);
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+  return response.json();
+}
+
 // Delay in ms before showing the move at gameHistory[moveIndex].
 function getDelayBeforeMove(moveIndex) {
   if (moveTimestamps && moveIndex > 0) {
@@ -247,10 +305,13 @@ function getDelayBeforeMove(moveIndex) {
   return playbackInterval;
 }
 
-// Parse PGN text, get move history and starting position
-function parsePGN(pgnText) {
+// Parse PGN text, get move history and starting position.
+// If precomputedTimestamps is given, it is used instead of extracting
+// [%timestamp N] annotations from the PGN text (e.g. for chess.com games).
+function parsePGN(pgnText, precomputedTimestamps) {
   const chess = new Chess();
-  moveTimestamps = extractMoveTimestamps(pgnText);
+  moveTimestamps = precomputedTimestamps !== undefined ?
+    precomputedTimestamps : extractMoveTimestamps(pgnText);
 
   try {
     chess.load_pgn(pgnText);
@@ -446,12 +507,12 @@ function pausePlayback() {
   if (chessboard && !startingPositionOnly) updateButtonStates();
 }
 
-function loadGame(pgnText) {
+function loadGame(pgnText, precomputedTimestamps) {
   clearPgnError();
   pausePlayback();
   currentMoveIndex = 0;
 
-  const pgnData = parsePGN(pgnText);
+  const pgnData = parsePGN(pgnText, precomputedTimestamps);
   if (!pgnData) {
     showPgnError('Could not parse the PGN. Check the format and try again.');
     return;
@@ -461,15 +522,49 @@ function loadGame(pgnText) {
   showReplayerView();
 }
 
-function handleLoadPgn() {
-  const pgnText = pgnInput.value.trim();
-  if (!pgnText) {
-    showPgnError('Paste a PGN before loading.');
+function setLoadingState(isLoading) {
+  loadPgnButton.disabled = isLoading;
+  loadPgnButton.textContent = isLoading ? 'Loading…' : 'Load game';
+}
+
+async function loadFromChessComUrl(gameId) {
+  setLoadingState(true);
+  try {
+    const data = await fetchChessComGame(gameId);
+    const gameJson = data.game || data;
+    const pgnText = gameJson.pgn;
+    if (!pgnText) {
+      throw new Error('Response did not include PGN data.');
+    }
+
+    const timestamps = buildThinkTimesFromChessComGame(gameJson);
+    loadGame(pgnText, timestamps);
+  } catch (error) {
+    console.error('Error loading chess.com game:', error);
+    showPgnError(
+      'Could not load the game from chess.com. Check the link and try again.');
+  } finally {
+    setLoadingState(false);
+  }
+}
+
+async function handleLoadPgn() {
+  const inputText = pgnInput.value.trim();
+  if (!inputText) {
+    showPgnError('Paste a PGN or a chess.com game link before loading.');
     pgnInput.focus();
     return;
   }
 
-  loadGame(pgnText);
+  clearPgnError();
+
+  const chessComMatch = inputText.match(CHESSCOM_URL_REGEX);
+  if (chessComMatch) {
+    await loadFromChessComUrl(chessComMatch[1]);
+    return;
+  }
+
+  loadGame(inputText);
 }
 
 createUI();
