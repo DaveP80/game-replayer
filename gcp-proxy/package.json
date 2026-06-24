@@ -1,0 +1,9 @@
+{
+  "name": "chess-com-proxy",
+  "version": "1.0.0",
+  "description": "CORS proxy for chess.com's live game callback endpoint",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -285,15 +285,16 @@ function buildThinkTimesFromChessComGame(gameJson) {
 }
 
 // chess.com's callback endpoint does not send CORS headers, so a browser
-// fetch to it directly is blocked. Route it through a public CORS proxy
-// that fetches it server-side and forwards the response with CORS allowed.
-const CORS_PROXY_URL = 'https://corsproxy.io/?url=';
+// fetch to it directly is blocked. Route it through a small proxy (see
+// gcp-proxy/) that fetches it server-side and forwards the response with
+// CORS allowed. Set this to your deployed function's URL.
+const CHESS_PROXY_BASE_URL =
+  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/chessComProxy';
 
 // Fetch a live game's data from chess.com's callback endpoint.
 async function fetchChessComGame(gameId) {
-  const targetUrl = `https://www.chess.com/callback/live/game/${gameId}`;
-  const response =
-    await fetch(`${CORS_PROXY_URL}${encodeURIComponent(targetUrl)}`);
+  const response = await fetch(
+    `${CHESS_PROXY_BASE_URL}?gameId=${encodeURIComponent(gameId)}`);
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`);
   }
